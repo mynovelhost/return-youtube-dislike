@@ -1,122 +1,86 @@
 (function(securityToken, extensionId) {
-    function getButtons() {
-        return document
-            .getElementById("menu-container")
-            ?.querySelector("#top-level-buttons-computed");
+    var navigationEventRegistered = false;
+    var pagePreparing = false;
+    var preparingInterval = null;
+
+    function registerNavigationEvent() {
+        if (navigationEventRegistered) return;
+        navigationEventRegistered = true;
+        document.addEventListener("yt-navigate-finish", (event) => {
+            onNavigateFinish();
+        });
     }
 
-    function getLikeButton() {
-        return getButtons().children[0];
-    }
-
-    function getDislikeButton() {
-        return getButtons().children[1];
-    }
-
-    function isVideoLiked() {
-        return getLikeButton().classList.contains("style-default-active");
-    }
-
-    function isVideoDisliked() {
-        return getDislikeButton().classList.contains("style-default-active");
-    }
-
-    function isVideoNotLiked() {
-        return getLikeButton().classList.contains("style-text");
-    }
-
-    function isVideoNotDisliked() {
-        return getDislikeButton().classList.contains("style-text");
-    }
-
-    function getState() {
-        if (isVideoLiked()) {
-            return "liked";
+    function processPage(videoId, likeButton, dislikeButton) {
+        function getActiveState(button) {
+            return button.classList.contains("style-default-active");
         }
-        if (isVideoDisliked()) {
-            return "disliked";
+
+        function setTextValue(button, value) {
+            button.querySelector("#text").innerText = value;
         }
-        return "neutral";
-    }
 
-    function setLikes(likesCount) {
-        getButtons().children[0].querySelector("#text").innerText = likesCount;
-    }
+        function shouldUpdate(button) {
+            if (button.getAttribute('state-attached') !== null) return false;
+            button.setAttribute('state-attached', 'true');
+            return true;
+        }
 
-    function setDislikes(dislikesCount) {
-        getButtons().children[1].querySelector("#text").innerText = dislikesCount;
-    }
+        function numberFormat(numberState) {
+            const userLocales = navigator.language;
+            const formatter = Intl.NumberFormat(userLocales, {
+                notation: "compact"
+            });
+            return formatter.format(numberState);
+        }
 
-    function setState() {
-        chrome.runtime.sendMessage(extensionId, {
-				securityToken: securityToken,
+        function getState() {
+            if (getActiveState(likeButton)) return "liked";
+            return getActiveState(dislikeButton) ? "disliked" : "neutral";
+        }
+
+        function setState() {
+            chrome.runtime.sendMessage(extensionId, {
+                securityToken: securityToken,
                 message: "set_state",
-                videoId: getVideoId(),
-                state: getState(),
-            },
-            function(response) {
-                if (response != undefined) {
+                videoId: videoId,
+                state: getState()
+            }, function(response) {
+                if (response !== undefined) {
                     const formattedDislike = numberFormat(response.dislikes);
-                    // setLikes(response.likes);
-                    console.log(response);
-                    setDislikes(formattedDislike);
+                    // setTextValue(likeButton, response.likes);
+                    setTextValue(dislikeButton, formattedDislike);
                 } else {}
-            }
-        );
-    }
-
-    function likeClicked() {
-        console.log("like" + getState());
-        setState();
-    }
-
-    function dislikeClicked() {
-        console.log("dislike" + getState());
-        setState();
-    }
-
-    function setInitalState() {
-        setState();
-    }
-
-    function getVideoId() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const videoId = urlParams.get("v");
-        return videoId;
-    }
-
-    function isVideoLoaded() {
-        const videoId = getVideoId();
-        return (
-            document.querySelector(`ytd-watch-flexy[video-id='${videoId}']`) !== null
-        );
-    }
-
-    function numberFormat(numberState) {
-        const userLocales = navigator.language;
-        const formatter = Intl.NumberFormat(userLocales, { notation: "compact" });
-        return formatter.format(numberState);
-    }
-
-    function setEventListeners(evt) {
-        function checkForJS_Finish() {
-            if (getButtons()?.offsetParent && isVideoLoaded()) {
-                clearInterval(jsInitChecktimer);
-                const buttons = getButtons();
-                if (!window.returnDislikeButtonlistenersSet) {
-                    buttons.children[0].addEventListener("click", likeClicked);
-                    buttons.children[1].addEventListener("click", dislikeClicked);
-                    window.returnDislikeButtonlistenersSet = true;
-                }
-                setInitalState();
-            }
+            });
         }
 
-        if (window.location.href.indexOf("watch?") >= 0) {
-            var jsInitChecktimer = setInterval(checkForJS_Finish, 111);
+        setState();
+        if (shouldUpdate(likeButton)) likeButton.addEventListener("click", setState);
+        if (shouldUpdate(dislikeButton)) dislikeButton.addEventListener("click", setState);
+        registerNavigationEvent();
+    }
+
+    function preparePage(videoId) {
+        var buttons = document.getElementById('top-level-buttons-computed');
+        if (buttons === null || !pagePreparing) return;
+
+        pagePreparing = false;
+        clearInterval(preparingInterval);
+        processPage(videoId, buttons.children[0], buttons.children[1]);
+    }
+
+    function onNavigateFinish() {
+        var videoId = new URLSearchParams(window.location.search).get("v");
+        if (videoId === null || window.location.pathname !== "/watch")
+            registerNavigationEvent();
+        else {
+            if (pagePreparing)
+                clearInterval(preparingInterval);
+            pagePreparing = true;
+            preparingInterval = setInterval(preparePage, 111, videoId);
         }
     }
 
-    setEventListeners();
+    onNavigateFinish();
 
 })(document.currentScript.getAttribute("security-token"), document.currentScript.getAttribute("extension-id"));
